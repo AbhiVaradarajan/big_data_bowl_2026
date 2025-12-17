@@ -1,0 +1,829 @@
+```{r}
+library(tidyverse)
+library(nflverse)
+library(RANN)
+```
+
+```{r}
+#function to check whether a player is actively matching a reciever
+get_in_pursuit <- function(def_dir, rec_dir, angle_to_rec){
+  if (angle_to_rec > rec_dir){
+    if ((360 - angle_to_rec) + rec_dir < 180){
+      return(def_dir < rec_dir | def_dir > angle_to_rec)
+    } else{
+      return(def_dir > rec_dir & def_dir < angle_to_rec)
+    }
+  }else{
+    if ((360 - rec_dir) + angle_to_rec < 180){
+      return(def_dir > rec_dir | def_dir < angle_to_rec)
+    } else{
+      return(def_dir < rec_dir & def_dir > angle_to_rec)
+  }}
+}
+
+get_nearest_defender <- function(full_tracking, game, play, player, frame){
+  player_example <- full_tracking |>
+    filter(game_id == game, play_id == play,
+           nfl_id == player, frame_id == frame)
+  player_x <- player_example$x[[1]]
+  player_y <- player_example$y[[1]]
+  player_speed <- player_example$s[[1]]
+  player_dir <- player_example$o[[1]]
+  player_sof <- player_example$side_of_field[[1]]
+  is_target <- player_example$player_to_predict[[1]]
+  defenders_subset <- full_tracking |>
+    filter(game_id == game & play_id == play & frame_id == frame &
+           player_role == "Defensive Coverage") |>
+    mutate(receiver_x = player_x, receiver_y = player_y, 
+           receiver_s = player_speed, receiver_dir = player_dir) |>
+    mutate(dist_to_player_h = abs(x - receiver_x), dist_to_player_y = abs(y - receiver_y)) |>
+    mutate(angle_true = atan(dist_to_player_h/dist_to_player_y) * 180/pi) |>
+    mutate(angle_true = case_when(receiver_x >= x & receiver_y <= y~angle_true+90,
+                                  receiver_x <= x & receiver_y <= y~angle_true+180,
+                                  receiver_x <= x & receiver_y >= y~angle_true+270,
+                                  receiver_x >= x & receiver_y >= y~angle_true)) |>
+    mutate(in_pursuit = mapply(get_in_pursuit, dir, receiver_dir, angle_true)) #|>
+  defenders_full <- defenders_subset
+  receiver_nn <- player_example |>
+    ungroup() |>
+     select(c(x, y))
+   defenders_nn <- defenders_subset |> filter(in_pursuit == 1 | side_of_field == player_sof)  |>
+     ungroup() |>
+     select(c(x, y))
+   if (is_target){
+    defenders_subset <- defenders_full |>
+      filter(player_to_predict == TRUE)
+    defenders_nn <- defenders_subset |>
+       ungroup() |>
+       select(c(x, y))
+   }
+   if (nrow(defenders_nn) == 0){
+     defenders_subset <- defenders_full
+     defenders_nn <- defenders_subset |>
+       ungroup() |>
+       select(c(x, y))
+   }
+   # if (is_target){
+   #  defenders_subset <- defenders_full |>
+   #    filter(player_to_predict == TRUE)
+   #  defenders_nn <- defenders_subset |>
+   #     ungroup() |>
+   #     select(c(x, y))
+   # }
+  player_nn <- nn2(data = defenders_nn, query = receiver_nn,  k = 1)
+  player_index <- as_tibble(player_nn[1])$nn.idx[[1]]
+  nearest_defender <- defenders_subset[player_index,]$nfl_id[[1]]
+  return(nearest_defender)
+  
+}
+
+get_nearest_defender_x<- function(full_tracking, game, play, frame, nearest_defender){
+  defender_data <-
+    full_tracking |>
+    filter(game_id == game, play_id == play, 
+           frame_id == frame, nfl_id == nearest_defender)
+  return(defender_data$x[[1]])
+}
+
+get_nearest_defender_y<- function(full_tracking, game, play, frame, nearest_defender){
+  defender_data <-
+    full_tracking |>
+    filter(game_id == game, play_id == play, 
+           frame_id == frame, nfl_id == nearest_defender)
+  return(defender_data$y[[1]])
+}
+```
+
+```{r}
+get_field_zone <- function(x, y, LOS, speed, dir){
+  dir <- 360-dir
+  dir = dir + 90
+  if (dir > 360){
+    dir <- dir - 360
+  }
+  #speed <- speed * 2
+  if (speed != 0){
+    x_disp <- speed*cos(dir * (pi/180))
+    y_disp <- speed*sin(dir * (pi/180))
+    x <- x + x_disp
+    y <- y + y_disp
+  }
+  depth <- x - LOS
+  if (depth < 0){
+    return("Behind LOS")
+  }
+  if (depth >= 20){
+    if (y <= 17.8){
+      return("Right Deep Out")
+    } else if (y > 35.5){
+      return("Left Deep Out")
+    } else {
+      return("Deep Middle")
+    }
+  } else if(depth <= 9){
+    if (y <= 12){
+      return("Right Flat")
+    }else if (y <= 21.65){
+      return("Right Shallow SHC")
+    }else if (y <=31.65){
+      return ("Shallow Middle")
+    } else if (y <= 41.3){
+      return ("Left Shallow SHC")
+    } else{
+    return ("Left Flat")
+      }
+  } else{
+    if (y <= 12){
+      return("Right Out")
+    }else if (y <= 21.65){
+      return("Right SHC")
+    }else if (y <=31.65){
+      return ("Middle Hook")
+    } else if (y <= 41.3){
+      return ("Left SHC")
+    } else{
+    return ("Left Out")
+      }
+  }
+}
+```
+
+```{r}
+get_play_direction <- function(input_data) {
+  play_dirs <- input_data |>
+  group_by(game_id, play_id) |>
+  slice(1) |>
+  ungroup() |>
+  select(game_id, play_id, play_direction)
+  return(play_dirs)
+}
+
+get_supp_info <- function(input_data, game, play){
+  play_dirs <- input_data |>
+    filter(player_role == "Targeted Receiver") |>
+    group_by(game_id, play_id) |>
+    slice(1) |>
+    ungroup() |>
+    select(game_id, play_id, nfl_id, ball_land_x, ball_land_y, nearest_defender) |>
+      rename("receiver_id" = nfl_id, "ball_x" = ball_land_x,
+             "ball_y" = ball_land_y, "nearest_def" = nearest_defender)
+  return(play_dirs)
+}
+```
+
+```{r}
+clean_input <- function(input){
+  cleaned <- input |>
+    mutate(x = ifelse(play_direction == "left", 120 - x, x),
+         y = ifelse(play_direction == "left", 53.3 - y, y),
+         o = ifelse(play_direction == "left", (o + 180) %% 360, o),
+         dir = ifelse(play_direction == "left", (dir + 180) %% 360, dir),
+         ball_land_x = ifelse(play_direction == "left", 120 - ball_land_x, ball_land_x),
+         ball_land_y = ifelse(play_direction == "left", 53.3 - ball_land_y, ball_land_y),) |>
+    mutate(side_of_field = ifelse(y < 26.65, "right", "left")) |>
+    mutate(play_start_side = ifelse(player_position == "QB" & frame_id == 1, side_of_field, NA)) |>
+    group_by(game_id, play_id) |>
+    arrange(play_start_side) |>
+    fill(play_start_side) |>
+    ungroup()
+  return(cleaned)
+}
+
+clean_output <- function(output, input){
+  play_directions <- get_play_direction(input)
+  cleaned <- left_join(output, play_directions, by = c("game_id", "play_id")) |>
+    mutate(x = ifelse(play_direction == "left", 120 - x, x),
+         y = ifelse(play_direction == "left", 53.3 - y, y),) |>
+    mutate(side_of_field = ifelse(y < 26.65, "right", "left")) |>
+    ungroup()
+  return(cleaned)
+}
+```
+
+
+```{r}
+get_receiver_distr <- function(input_tracking){
+  receivers_input <- input_tracking |>
+    group_by(game_id, play_id) |>
+    mutate(players = length(unique(nfl_id))) |>
+    filter(players > 1) |>
+    filter(!(grepl("SCRAMBLE", dropback_type))) |>
+    group_by(player_role) |>
+    mutate(is_eligible = ifelse(player_role == "Other Route Runner" | player_role == "Targeted Receiver",
+                                 1, 0)) |>
+    group_by(game_id, play_id, nfl_id) |>
+    mutate(last_frame = max(frame_id)) |>
+    filter(frame_id == last_frame) |>
+    mutate(nearest_defender = ifelse(is_eligible == 1 & frame_id == last_frame,
+                                      get_nearest_defender(input_tracking, 
+                                                           game_id, play_id, nfl_id, frame_id), NA)) |>
+    mutate(depth = ifelse(is_eligible == 1, x - LOS, NA)) |>
+    mutate(field_zone = ifelse(is_eligible == 1, get_field_zone(x, y, LOS, s, dir), NA)) |>
+    ungroup() |>
+    group_by(game_id, play_id, frame_id) |>
+    filter(is_eligible == 1) |>
+    ungroup()
+  return(receivers_input)
+}
+```
+
+```{r}
+get_field_zone_distr <- function(receivers_week){
+  field_zones <- receivers_week |>
+    filter(player_role != "Targeted Receiver") |>
+    group_by(game_id, play_id, nfl_id, frame_id) |>
+    slice(1) |>
+    mutate(ball_field_zone = get_field_zone(ball_land_x, ball_land_y, LOS, 0, 0)) |>
+    ungroup() |>
+    group_by(game_id, play_id) |>
+    arrange(field_zone) |>
+    mutate(attack_plan = paste(field_zone, collapse = ", ")) |>
+    ungroup() |>
+    mutate(LSHC = ifelse(grepl("Left SHC", attack_plan), 1, 0),
+           RSHC = ifelse(grepl("Right SHC", attack_plan), 1, 0),
+           LSSHC = ifelse(grepl("Left Shallow SHC", attack_plan), 1, 0),
+           RSSHC = ifelse(grepl("Right Shallow SHC", attack_plan), 1, 0),
+           LF = ifelse(grepl("Left Flat", attack_plan), 1, 0),
+           RF = ifelse(grepl("Right Flat", attack_plan), 1, 0),
+           SM = ifelse(grepl("Shallow Middle", attack_plan), 1, 0),
+           MH = ifelse(grepl("Middle Hook", attack_plan), 1, 0),
+           RO = ifelse(grepl("Right Out", attack_plan), 1, 0),
+           LO = ifelse(grepl("Left Out", attack_plan), 1, 0),
+           LDO = ifelse(grepl("Left Deep Out", attack_plan), 1, 0),
+           RDO = ifelse(grepl("Right Deep Out", attack_plan), 1, 0),
+           DM = ifelse(grepl("Deep Middle", attack_plan), 1, 0)) |>
+    ungroup() |>
+    group_by(game_id, play_id) |>
+    slice(1) |>
+    select(-c(player_to_predict, nfl_id, frame_id, play_direction,
+              player_name, player_height, player_weight, player_birth_date,
+              player_position, player_side, player_role,
+              x, y, s, o, a, dir, num_frames_output, ball_land_x, ball_land_y, 
+              side_of_field, play_start_side, dropback_type, is_eligible, 
+              last_frame, nearest_defender, depth, field_zone)) |>
+    ungroup()
+  return(field_zones)
+}
+```
+
+```{r}
+get_field_zone_comb <- function(receivers_week){
+  field_zones <- receivers_week |>
+    filter(player_role != "Targeted Receiver") |>
+    group_by(game_id, play_id, nfl_id, frame_id) |>
+    slice(1) |>
+    mutate(ball_field_zone = get_field_zone(ball_land_x, ball_land_y, LOS, 0, 0)) |>
+    ungroup() |>
+    group_by(game_id, play_id) |>
+    arrange(field_zone) |>
+    mutate(attack_plan = paste(field_zone, collapse = ", ")) |>
+    ungroup() |>
+    mutate(SHC = ifelse(grepl("t SHC", attack_plan), 1, 0),
+           SSHC = ifelse(grepl("Shallow SHC", attack_plan), 1, 0),
+           FL = ifelse(grepl("Flat", attack_plan), 1, 0),
+           SM = ifelse(grepl("Shallow Middle", attack_plan), 1, 0),
+           MH = ifelse(grepl("Middle Hook", attack_plan), 1, 0),
+           O = ifelse(grepl("t Out", attack_plan), 1, 0),
+           DO = ifelse(grepl("Deep Out", attack_plan), 1, 0),
+           DM = ifelse(grepl("Deep Middle", attack_plan), 1, 0)) |>
+    ungroup() |>
+    group_by(game_id, play_id) |>
+    slice(1) |>
+    select(-c(player_to_predict, nfl_id, frame_id, play_direction,
+              player_name, player_height, player_weight, player_birth_date,
+              player_position, player_side, player_role,
+              x, y, s, o, a, dir, num_frames_output, ball_land_x, ball_land_y, 
+              side_of_field, play_start_side, dropback_type, is_eligible, 
+              last_frame, nearest_defender, depth, field_zone)) |>
+    ungroup()
+  return(field_zones)
+}
+```
+
+
+```{r}
+get_close_pct <- function(output_tracking, receiver_data){
+  extra_info <- get_supp_info(receiver_data)
+  close_pcts <- left_join(output_tracking, extra_info, by = c("game_id", "play_id")) |>
+    filter(!grepl("SCRAMBLE", dropback_type)) |>
+    group_by(game_id, play_id) |>
+    mutate(players = length(unique(nfl_id))) |>
+    ungroup() |>
+    filter(players > 1) |>
+    group_by(game_id, play_id, nfl_id, frame_id) |>
+    mutate(is_receiver = (receiver_id == nfl_id),
+           is_nearest_def = nfl_id == nearest_def,
+           ball_field_zone = get_field_zone(ball_x, ball_y, LOS, 0, 0)) |>
+    ungroup() |>
+    group_by(game_id, play_id, frame_id) |>
+    mutate(receiver_x = ifelse(is_receiver, x, NA),
+           receiver_y = ifelse(is_receiver, y, NA)) |>
+    arrange(receiver_x) |>
+    fill(receiver_x, receiver_y) |>
+    filter(is_nearest_def) |>
+    ungroup() |>
+    mutate(dist_to_receiver = sqrt((x-receiver_x)^2 + (y-receiver_y)^2)) |>
+    filter(frame_id <= 5, !is_receiver) |>
+    group_by(game_id, play_id, nfl_id) |>
+    mutate(dist_at_throw = ifelse(frame_id == 1, dist_to_receiver, NA)) |>
+    fill(dist_at_throw) |>
+    mutate(pct_change = format((dist_to_receiver-dist_at_throw)/dist_at_throw*100, , scientific = F)) |>
+    filter(is_nearest_def, frame_id == max(frame_id)) |>
+    ungroup()
+  return(close_pcts)
+}
+```
+
+
+```{r, message=FALSE}
+week_1_input <- read_csv("input_2023_w01.csv")
+week_1_output <- read_csv("output_2023_w01.csv")
+week_2_input <- read_csv("input_2023_w02.csv")
+week_2_output <- read_csv("output_2023_w02.csv")
+week_3_input <- read_csv("input_2023_w03.csv")
+week_3_output <- read_csv("output_2023_w03.csv")
+week_4_input <- read_csv("input_2023_w04.csv")
+week_4_output <- read_csv("output_2023_w04.csv")
+week_5_input <- read_csv("input_2023_w05.csv")
+week_5_output <- read_csv("output_2023_w05.csv")
+week_6_input <- read_csv("input_2023_w06.csv")
+week_6_output <- read_csv("output_2023_w06.csv")
+week_7_input <- read_csv("input_2023_w07.csv")
+week_7_output <- read_csv("output_2023_w07.csv")
+week_8_input <- read_csv("input_2023_w08.csv")
+week_8_output <- read_csv("output_2023_w08.csv")
+week_9_input <- read_csv("input_2023_w09.csv")
+week_9_output <- read_csv("output_2023_w09.csv")
+week_10_input <- read_csv("input_2023_w10.csv")
+week_10_output <- read_csv("output_2023_w10.csv")
+week_11_input <- read_csv("input_2023_w11.csv")
+week_11_output <- read_csv("output_2023_w11.csv")
+week_12_input <- read_csv("input_2023_w12.csv")
+week_12_output <- read_csv("output_2023_w12.csv")
+week_13_input <- read_csv("input_2023_w13.csv")
+week_13_output <- read_csv("output_2023_w13.csv")
+week_14_input <- read_csv("input_2023_w14.csv")
+week_14_output <- read_csv("output_2023_w14.csv")
+week_15_input <- read_csv("input_2023_w15.csv")
+week_15_output <- read_csv("output_2023_w15.csv")
+week_16_input <- read_csv("input_2023_w16.csv")
+week_16_output <- read_csv("output_2023_w16.csv")
+week_17_input <- read_csv("input_2023_w17.csv")
+week_17_output <- read_csv("output_2023_w17.csv")
+week_18_input <- read_csv("input_2023_w18.csv")
+week_18_output <- read_csv("output_2023_w18.csv")
+supplementary_data <- read_csv("supplementary_data.csv")
+```
+
+```{r}
+week_1_input <- clean_input(week_1_input)
+week_1_output <- clean_output(week_1_output, week_1_input)
+week_2_input <- clean_input(week_2_input)
+week_2_output <- clean_output(week_2_output, week_2_input)
+week_3_input <- clean_input(week_3_input)
+week_3_output <- clean_output(week_3_output, week_3_input)
+week_4_input <- clean_input(week_4_input)
+week_4_output <- clean_output(week_4_output, week_4_input)
+week_5_input <- clean_input(week_5_input)
+week_5_output <- clean_output(week_5_output, week_5_input)
+week_6_input <- clean_input(week_6_input)
+week_6_output <- clean_output(week_6_output, week_6_input)
+week_7_input <- clean_input(week_7_input)
+week_7_output <- clean_output(week_7_output, week_7_input)
+week_8_input <- clean_input(week_8_input)
+week_8_output <- clean_output(week_8_output, week_8_input)
+week_9_input <- clean_input(week_9_input)
+week_9_output <- clean_output(week_9_output, week_9_input)
+week_10_input <- clean_input(week_10_input)
+week_10_output <- clean_output(week_10_output, week_10_input)
+week_11_input <- clean_input(week_11_input)
+week_11_output <- clean_output(week_11_output, week_11_input)
+week_12_input <- clean_input(week_12_input)
+week_12_output <- clean_output(week_12_output, week_12_input)
+week_13_input <- clean_input(week_13_input)
+week_13_output <- clean_output(week_13_output, week_13_input)
+week_14_input <- clean_input(week_14_input)
+week_14_output <- clean_output(week_14_output, week_14_input)
+week_15_input <- clean_input(week_15_input)
+week_15_output <- clean_output(week_15_output, week_15_input)
+week_16_input <- clean_input(week_16_input)
+week_16_output <- clean_output(week_16_output, week_16_input)
+week_17_input <- clean_input(week_17_input)
+week_17_output <- clean_output(week_17_output, week_17_input)
+week_18_input <- clean_input(week_18_input)
+week_18_output <- clean_output(week_18_output, week_18_input)
+```
+
+```{r}
+cleaned_supp <- supplementary_data |> 
+  select(c(game_id, play_id, possession_team, defensive_team, yardline_side, yardline_number, team_coverage_type, dropback_type, pass_result)) |>
+  mutate(LOS = ifelse(yardline_side == defensive_team, (50 - yardline_number) + 60, yardline_number),
+         LOS = ifelse(yardline_side == possession_team, yardline_number + 10, LOS),
+         LOS = ifelse(yardline_number == 50, 60, LOS)) |>
+  select(-c(yardline_side, yardline_number))
+```
+
+```{r}
+week_1_input <- left_join(week_1_input, cleaned_supp, by = c("game_id", "play_id"))
+week_1_output <- left_join(week_1_output, cleaned_supp, by = c("game_id", "play_id"))
+week_2_input <- left_join(week_2_input, cleaned_supp, by = c("game_id", "play_id"))
+week_2_output <- left_join(week_2_output, cleaned_supp, by = c("game_id", "play_id"))
+week_3_input <- left_join(week_3_input, cleaned_supp, by = c("game_id", "play_id"))
+week_3_output <- left_join(week_3_output, cleaned_supp, by = c("game_id", "play_id"))
+week_4_input <- left_join(week_4_input, cleaned_supp, by = c("game_id", "play_id"))
+week_4_output <- left_join(week_4_output, cleaned_supp, by = c("game_id", "play_id"))
+week_5_input <- left_join(week_5_input, cleaned_supp, by = c("game_id", "play_id"))
+week_5_output <- left_join(week_5_output, cleaned_supp, by = c("game_id", "play_id"))
+week_6_input <- left_join(week_6_input, cleaned_supp, by = c("game_id", "play_id"))
+week_6_output <- left_join(week_6_output, cleaned_supp, by = c("game_id", "play_id"))
+week_7_input <- left_join(week_7_input, cleaned_supp, by = c("game_id", "play_id"))
+week_7_output <- left_join(week_7_output, cleaned_supp, by = c("game_id", "play_id"))
+week_8_input <- left_join(week_8_input, cleaned_supp, by = c("game_id", "play_id"))
+week_8_output <- left_join(week_8_output, cleaned_supp, by = c("game_id", "play_id"))
+week_9_input <- left_join(week_9_input, cleaned_supp, by = c("game_id", "play_id"))
+week_9_output <- left_join(week_9_output, cleaned_supp, by = c("game_id", "play_id"))
+week_10_input <- left_join(week_10_input, cleaned_supp, by = c("game_id", "play_id"))
+week_10_output <- left_join(week_10_output, cleaned_supp, by = c("game_id", "play_id"))
+week_11_input <- left_join(week_11_input, cleaned_supp, by = c("game_id", "play_id"))
+week_11_output <- left_join(week_11_output, cleaned_supp, by = c("game_id", "play_id"))
+week_12_input <- left_join(week_12_input, cleaned_supp, by = c("game_id", "play_id"))
+week_12_output <- left_join(week_12_output, cleaned_supp, by = c("game_id", "play_id"))
+week_13_input <- left_join(week_13_input, cleaned_supp, by = c("game_id", "play_id"))
+week_13_output <- left_join(week_13_output, cleaned_supp, by = c("game_id", "play_id"))
+week_14_input <- left_join(week_14_input, cleaned_supp, by = c("game_id", "play_id"))
+week_14_output <- left_join(week_14_output, cleaned_supp, by = c("game_id", "play_id"))
+week_15_input <- left_join(week_15_input, cleaned_supp, by = c("game_id", "play_id"))
+week_15_output <- left_join(week_15_output, cleaned_supp, by = c("game_id", "play_id"))
+week_16_input <- left_join(week_16_input, cleaned_supp, by = c("game_id", "play_id"))
+week_16_output <- left_join(week_16_output, cleaned_supp, by = c("game_id", "play_id"))
+week_17_input <- left_join(week_17_input, cleaned_supp, by = c("game_id", "play_id"))
+week_17_output <- left_join(week_17_output, cleaned_supp, by = c("game_id", "play_id"))
+week_18_input <- left_join(week_18_input, cleaned_supp, by = c("game_id", "play_id"))
+week_18_output <- left_join(week_18_output, cleaned_supp, by = c("game_id", "play_id"))
+```
+
+```{r}
+field_zone_w1 <- get_receiver_distr(week_1_input)
+field_zone_w2 <- get_receiver_distr(week_2_input)
+field_zone_w3 <- get_receiver_distr(week_3_input)
+field_zone_w4 <- get_receiver_distr(week_4_input)
+field_zone_w5 <- get_receiver_distr(week_5_input)
+field_zone_w6 <- get_receiver_distr(week_6_input)
+field_zone_w7 <- get_receiver_distr(week_7_input)
+field_zone_w8 <- get_receiver_distr(week_8_input)
+field_zone_w9 <- get_receiver_distr(week_9_input)
+field_zone_w10 <- get_receiver_distr(week_10_input)
+field_zone_w11 <- get_receiver_distr(week_11_input)
+field_zone_w12 <- get_receiver_distr(week_12_input)
+field_zone_w13 <- get_receiver_distr(week_13_input)
+field_zone_w14 <- get_receiver_distr(week_14_input)
+field_zone_w15 <- get_receiver_distr(week_15_input)
+field_zone_w16 <- get_receiver_distr(week_16_input)
+field_zone_w17 <- get_receiver_distr(week_17_input)
+field_zone_w18 <- get_receiver_distr(week_18_input)
+```
+
+```{r}
+field_zone_master <- rbind(field_zone_w1, field_zone_w2)
+field_zone_master <- rbind(field_zone_master, field_zone_w3)
+field_zone_master <- rbind(field_zone_master, field_zone_w4)
+field_zone_master <- rbind(field_zone_master, field_zone_w5)
+field_zone_master <- rbind(field_zone_master, field_zone_w6)
+field_zone_master <- rbind(field_zone_master, field_zone_w7)
+field_zone_master <- rbind(field_zone_master, field_zone_w8)
+field_zone_master <- rbind(field_zone_master, field_zone_w9)
+field_zone_master <- rbind(field_zone_master, field_zone_w10)
+field_zone_master <- rbind(field_zone_master, field_zone_w11)
+field_zone_master <- rbind(field_zone_master, field_zone_w12)
+field_zone_master <- rbind(field_zone_master, field_zone_w13)
+field_zone_master <- rbind(field_zone_master, field_zone_w14)
+field_zone_master <- rbind(field_zone_master, field_zone_w15)
+field_zone_master <- rbind(field_zone_master, field_zone_w15)
+field_zone_master <- rbind(field_zone_master, field_zone_w16)
+field_zone_master <- rbind(field_zone_master, field_zone_w17)
+field_zone_master <- rbind(field_zone_master, field_zone_w18)
+```
+
+```{r}
+niners_all_coverages <- field_zone_master |>
+  get_field_zone_distr() |>
+  mutate(count = 1) |>
+  filter(possession_team == "SF",
+         ball_field_zone != "Behind LOS") |>
+  group_by(ball_field_zone) |>
+  summarise(LF_PP = sum(LF),
+            LSSHC_PP = sum(LSSHC),
+            SM_PP = sum(SM),
+            RSSHC_PP = sum(RSSHC),
+            RF_PP = sum(RF),
+            LO_PP = sum(LO),
+            LSHC_PP = sum(LSHC),
+            MH_PP = sum(MH),
+            RSHC_PP = sum(RSHC),
+            RO_PP = sum(RO),
+            LDO_PP = sum(LDO),
+            DM_PP = sum(DM),
+            RDO_PP = sum(RDO),
+            total_reps = sum(count)) |>
+  mutate(Flat = case_when(grepl("Left", ball_field_zone)~LF_PP,
+                          grepl("Right", ball_field_zone)~RF_PP,
+                          grepl("Middle", ball_field_zone)~RF_PP+LF_PP),
+         Shallow_SHC = case_when(grepl("Left", ball_field_zone)~LSSHC_PP,
+                          grepl("Right", ball_field_zone)~RSSHC_PP,
+                          grepl("Middle", ball_field_zone)~RSSHC_PP+LSSHC_PP),
+         Out = case_when(grepl("Left", ball_field_zone)~LO_PP,
+                          grepl("Right", ball_field_zone)~RO_PP,
+                          grepl("Middle", ball_field_zone)~RO_PP+LO_PP),
+         SHC = case_when(grepl("Left", ball_field_zone)~LSHC_PP,
+                          grepl("Right", ball_field_zone)~RSHC_PP,
+                          grepl("Middle", ball_field_zone)~RSHC_PP+LSHC_PP),
+         Deep_Out = case_when(grepl("Left", ball_field_zone)~LDO_PP,
+                          grepl("Right", ball_field_zone)~RDO_PP,
+                          grepl("Middle", ball_field_zone)~RDO_PP+LDO_PP)) |>
+  rename("Deep_Middle" = DM_PP, "Middle_Hook" = MH_PP, "Shallow_Middle" = SM_PP) |>
+  select(c(ball_field_zone, Flat, Shallow_SHC, Shallow_Middle, 
+           Out, SHC, Middle_Hook,
+           Deep_Out, Deep_Middle, total_reps)) |>
+  mutate(ball_field_zone = case_when(grepl("Flat", ball_field_zone)~"Flat",
+                          grepl("Shallow SHC", ball_field_zone)~"Shallow SHC",
+                          grepl("Shallow Middle", ball_field_zone)~"Shallow Middle",
+                          grepl("t SHC", ball_field_zone)~"SHC",
+                          grepl("t Out", ball_field_zone)~"Out",
+                          grepl("Hook", ball_field_zone)~"Middle Hook",
+                          grepl("Deep Out", ball_field_zone)~"Deep Out",
+                          grepl("Deep Middle", ball_field_zone)~"Deep Middle")) |>
+  group_by(ball_field_zone) |>
+  summarize(Flat = sum(Flat),
+            Shallow_SHC = sum(Shallow_SHC),
+            Shallow_Middle = sum(Shallow_Middle),
+            Out = sum(Out),
+            SHC = sum(SHC),
+            Middle_Hook = sum(Middle_Hook),
+            Deep_Out = sum(Deep_Out),
+            Deep_Middle = sum(Deep_Middle),
+            total_reps = sum(total_reps)) |>
+  mutate(Coverage = "All") |>
+  group_by(Coverage) |>
+  summarize(Flat = sum(Flat),
+            Shallow_SHC = sum(Shallow_SHC),
+            Shallow_Middle = sum(Shallow_Middle),
+            Out = sum(Out),
+            SHC = sum(SHC),
+            Middle_Hook = sum(Middle_Hook),
+            Deep_Out = sum(Deep_Out),
+            Deep_Middle = sum(Deep_Middle),
+            total_recievers = (Flat + Shallow_SHC + Shallow_Middle + 
+                                 Out + SHC + Middle_Hook + Deep_Out + Deep_Middle)) |>
+  mutate(Flat = Flat/total_recievers,
+            Shallow_SHC = Shallow_SHC/total_recievers,
+            Shallow_Middle = Shallow_Middle/total_recievers,
+            Out = Out/total_recievers,
+            SHC = SHC/total_recievers,
+            Middle_Hook = Middle_Hook/total_recievers,
+            Deep_Out = Deep_Out/total_recievers,
+            Deep_Middle = Deep_Middle/total_recievers,
+         total_recievers = 242) |>
+  mutate(Flat = Flat*total_recievers,
+            Shallow_SHC = Shallow_SHC*total_recievers,
+            Shallow_Middle = Shallow_Middle*total_recievers,
+            Out = Out*total_recievers,
+            SHC = SHC*total_recievers,
+            Middle_Hook = Middle_Hook*total_recievers,
+            Deep_Out = Deep_Out*total_recievers,
+            Deep_Middle = Deep_Middle*total_recievers)
+
+  
+  
+```
+
+```{r}
+niners_c3 <- field_zone_master |>
+  get_field_zone_distr() |>
+  mutate(count = 1) |>
+  filter(possession_team == "SF",
+         team_coverage_type == "COVER_3_ZONE",
+         ball_field_zone != "Behind LOS") |>
+  group_by(ball_field_zone) |>
+  summarise(LF_PP = sum(LF),
+            LSSHC_PP = sum(LSSHC),
+            SM_PP = sum(SM),
+            RSSHC_PP = sum(RSSHC),
+            RF_PP = sum(RF),
+            LO_PP = sum(LO),
+            LSHC_PP = sum(LSHC),
+            MH_PP = sum(MH),
+            RSHC_PP = sum(RSHC),
+            RO_PP = sum(RO),
+            LDO_PP = sum(LDO),
+            DM_PP = sum(DM),
+            RDO_PP = sum(RDO),
+            total_reps = sum(count)) |>
+  mutate(Flat = case_when(grepl("Left", ball_field_zone)~LF_PP,
+                          grepl("Right", ball_field_zone)~RF_PP,
+                          grepl("Middle", ball_field_zone)~RF_PP+LF_PP),
+         Shallow_SHC = case_when(grepl("Left", ball_field_zone)~LSSHC_PP,
+                          grepl("Right", ball_field_zone)~RSSHC_PP,
+                          grepl("Middle", ball_field_zone)~RSSHC_PP+LSSHC_PP),
+         Out = case_when(grepl("Left", ball_field_zone)~LO_PP,
+                          grepl("Right", ball_field_zone)~RO_PP,
+                          grepl("Middle", ball_field_zone)~RO_PP+LO_PP),
+         SHC = case_when(grepl("Left", ball_field_zone)~LSHC_PP,
+                          grepl("Right", ball_field_zone)~RSHC_PP,
+                          grepl("Middle", ball_field_zone)~RSHC_PP+LSHC_PP),
+         Deep_Out = case_when(grepl("Left", ball_field_zone)~LDO_PP,
+                          grepl("Right", ball_field_zone)~RDO_PP,
+                          grepl("Middle", ball_field_zone)~RDO_PP+LDO_PP)) |>
+  rename("Deep_Middle" = DM_PP, "Middle_Hook" = MH_PP, "Shallow_Middle" = SM_PP) |>
+  select(c(ball_field_zone, Flat, Shallow_SHC, Shallow_Middle, 
+           Out, SHC, Middle_Hook,
+           Deep_Out, Deep_Middle, total_reps)) |>
+  mutate(ball_field_zone = case_when(grepl("Flat", ball_field_zone)~"Flat",
+                          grepl("Shallow SHC", ball_field_zone)~"Shallow SHC",
+                          grepl("Shallow Middle", ball_field_zone)~"Shallow Middle",
+                          grepl("t SHC", ball_field_zone)~"SHC",
+                          grepl("t Out", ball_field_zone)~"Out",
+                          grepl("Hook", ball_field_zone)~"Middle Hook",
+                          grepl("Deep Out", ball_field_zone)~"Deep Out",
+                          grepl("Deep Middle", ball_field_zone)~"Deep Middle")) |>
+  group_by(ball_field_zone) |>
+  summarize(Flat = sum(Flat),
+            Shallow_SHC = sum(Shallow_SHC),
+            Shallow_Middle = sum(Shallow_Middle),
+            Out = sum(Out),
+            SHC = sum(SHC),
+            Middle_Hook = sum(Middle_Hook),
+            Deep_Out = sum(Deep_Out),
+            Deep_Middle = sum(Deep_Middle),
+            total_reps = sum(total_reps)) |>
+  mutate(Coverage = "Cover 3") |>
+  group_by(Coverage) |>
+  summarize(Flat = sum(Flat),
+            Shallow_SHC = sum(Shallow_SHC),
+            Shallow_Middle = sum(Shallow_Middle),
+            Out = sum(Out),
+            SHC = sum(SHC),
+            Middle_Hook = sum(Middle_Hook),
+            Deep_Out = sum(Deep_Out),
+            Deep_Middle = sum(Deep_Middle),
+            total_recievers = (Flat + Shallow_SHC + Shallow_Middle + 
+                                 Out + SHC + Middle_Hook + Deep_Out + Deep_Middle))
+
+```
+
+```{r}
+niners_chisq <- rbind(niners_all_coverages, niners_c3)
+```
+
+```{r}
+niners_chisq
+```
+
+
+```{r}
+close_rates_w1 <- get_close_pct(week_1_output, field_zone_w1)
+close_rates_w2 <- get_close_pct(week_2_output, field_zone_w2)
+close_rates_w3 <- get_close_pct(week_3_output, field_zone_w3)
+close_rates_w4 <- get_close_pct(week_4_output, field_zone_w4)
+close_rates_w5 <- get_close_pct(week_5_output, field_zone_w5)
+close_rates_w6 <- get_close_pct(week_6_output, field_zone_w6)
+close_rates_w7 <- get_close_pct(week_7_output, field_zone_w7)
+close_rates_w8 <- get_close_pct(week_8_output, field_zone_w8)
+close_rates_w9 <- get_close_pct(week_9_output, field_zone_w9)
+close_rates_w10 <- get_close_pct(week_10_output, field_zone_w10)
+close_rates_w11 <- get_close_pct(week_11_output, field_zone_w11)
+close_rates_w12 <- get_close_pct(week_12_output, field_zone_w12)
+close_rates_w13 <- get_close_pct(week_13_output, field_zone_w13)
+close_rates_w14 <- get_close_pct(week_14_output, field_zone_w14)
+close_rates_w15 <- get_close_pct(week_15_output, field_zone_w15)
+close_rates_w16 <- get_close_pct(week_16_output, field_zone_w16)
+close_rates_w17 <- get_close_pct(week_17_output, field_zone_w17)
+close_rates_w18 <- get_close_pct(week_18_output, field_zone_w18)
+```
+
+```{r}
+close_rates_master <- rbind(close_rates_w1, close_rates_w2)
+close_rates_master <- rbind(close_rates_master, close_rates_w3)
+close_rates_master <- rbind(close_rates_master, close_rates_w4)
+close_rates_master <- rbind(close_rates_master, close_rates_w5)
+close_rates_master <- rbind(close_rates_master, close_rates_w6)
+close_rates_master <- rbind(close_rates_master, close_rates_w7)
+close_rates_master <- rbind(close_rates_master, close_rates_w8)
+close_rates_master <- rbind(close_rates_master, close_rates_w9)
+close_rates_master <- rbind(close_rates_master, close_rates_w10)
+close_rates_master <- rbind(close_rates_master, close_rates_w11)
+close_rates_master <- rbind(close_rates_master, close_rates_w12)
+close_rates_master <- rbind(close_rates_master, close_rates_w13)
+close_rates_master <- rbind(close_rates_master, close_rates_w14)
+close_rates_master <- rbind(close_rates_master, close_rates_w15)
+close_rates_master <- rbind(close_rates_master, close_rates_w16)
+close_rates_master <- rbind(close_rates_master, close_rates_w17)
+close_rates_master <- rbind(close_rates_master, close_rates_w18)
+```
+
+```{r}
+close_rates_master <- read_csv("master_close_pct.csv")
+```
+
+
+```{r}
+close_rates_master |>
+  group_by(ball_field_zone) |>
+  filter(team_coverage_type == "COVER_2_ZONE", ball_field_zone != "Behind LOS") |>
+  mutate(count = 1, 
+         completion = ifelse(pass_result == "C", 1, 0)) |>
+  mutate(ball_field_zone = ifelse(ball_field_zone == "Left Flat" | 
+                                    ball_field_zone == "Right Flat",
+                             "Flat", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Shallow SHC" | 
+                                    ball_field_zone == "Right Shallow SHC",
+                             "Shallow SHC", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Out" | 
+                                    ball_field_zone == "Right Out", 
+                             "Out", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left SHC" | 
+                                    ball_field_zone == "Right SHC",
+                             "SHC", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Deep Out" | 
+                                    ball_field_zone == "Right Deep Out", 
+                             "Deep Out", ball_field_zone)) |>
+  summarize(total_reps = sum(count),
+            completion_pct = mean(completion),
+            avg_close_pct = mean(as.numeric(pct_change))/100,
+            separation_at_throw = mean(dist_at_throw),
+            separation_at_arrival = mean(dist_to_receiver)) |>
+  select(c(ball_field_zone, completion_pct)) |>
+  pivot_wider(names_from = ball_field_zone, values_from = completion_pct)
+
+#Comment on techinque; *why* it's harder for a C2 Safety to close the middle compared to Quarters and C3
+#SHC Space is generally easiest to in/out someone, that's where you can really get a guy going the wrong way
+#Shallow areas guys can drive down on anything in front of them easier to close down quickly
+```
+
+```{r}
+close_rates_master |>
+  group_by(ball_field_zone) |>
+  filter(team_coverage_type == "COVER_3_ZONE", ball_field_zone != "Behind LOS") |>
+  mutate(count = 1, 
+         completion = ifelse(pass_result == "C", 1, 0)) |>
+  mutate(ball_field_zone = ifelse(ball_field_zone == "Left Flat" | 
+                                    ball_field_zone == "Right Flat",
+                             "Flat", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Shallow SHC" | 
+                                    ball_field_zone == "Right Shallow SHC",
+                             "Shallow SHC", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Out" | 
+                                    ball_field_zone == "Right Out", 
+                             "Out", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left SHC" | 
+                                    ball_field_zone == "Right SHC",
+                             "SHC", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Deep Out" | 
+                                    ball_field_zone == "Right Deep Out", 
+                             "Deep Out", ball_field_zone)) |>
+  summarize(total_reps = sum(count),
+            completion_pct = mean(completion),
+            avg_close_pct = mean(as.numeric(pct_change)/100),
+            separation_at_throw = mean(dist_at_throw),
+            separation_at_arrival = mean(dist_to_receiver))
+```
+
+```{r}
+close_rates_master |>
+  group_by(ball_field_zone) |>
+  filter(team_coverage_type == "COVER_4_ZONE", ball_field_zone != "Behind LOS") |>
+  mutate(count = 1, 
+         completion = ifelse(pass_result == "C", 1, 0)) |>
+  mutate(ball_field_zone = ifelse(ball_field_zone == "Left Flat" | 
+                                    ball_field_zone == "Right Flat",
+                             "Flat", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Shallow SHC" | 
+                                    ball_field_zone == "Right Shallow SHC",
+                             "Shallow SHC", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Out" | 
+                                    ball_field_zone == "Right Out", 
+                             "Out", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left SHC" | 
+                                    ball_field_zone == "Right SHC",
+                             "SHC", ball_field_zone),
+         ball_field_zone = ifelse(ball_field_zone == "Left Deep Out" | 
+                                    ball_field_zone == "Right Deep Out", 
+                             "Deep Out", ball_field_zone)) |>
+  summarize(total_reps = sum(count),
+            completion_pct = mean(completion),
+            avg_close_pct = mean(as.numeric(pct_change)/100),
+            separation_at_throw = mean(dist_at_throw),
+            separation_at_arrival = mean(dist_to_receiver))
+```
+
+```{r}
+field_zones_distr_master <- field_zone_master |>
+  get_field_zone_distr()
+```
+
+
+```{r}
+write_csv(field_zones_distr_master, "master_field_zone_data.csv")
+write_csv(close_rates_master, "master_close_pct.csv")
+```
+
+

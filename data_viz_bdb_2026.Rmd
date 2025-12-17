@@ -1,0 +1,630 @@
+```{r}
+library(patchwork)
+library(tidyverse)
+```
+
+
+```{r}
+library(sportyR)
+field_params <- list(
+  field_apron = "gray",
+  field_border = "springgreen3",
+  offensive_endzone = "gray",
+  defensive_endzone = "gray",
+  offensive_half = "gray",
+  defensive_half = "gray"
+)
+field_background <- geom_football(
+  league = "nfl",
+  display_range = "in_bounds_only",
+  x_trans = 60,
+  y_trans = 26.6667,
+  xlims = c(35, 75),
+  rotation = 90,
+  #color_updates = field_params
+)
+field_background+
+  annotate("rect",xmin = -12, xmax = 0, ymin = 40,  ymax = 49, fill = "yellow", alpha = 0.9)+
+  annotate("text", x = -6, y = 44.5, label = "Flat", size = 10)+
+  annotate("rect",xmin = -53.3, xmax = -41.3, ymin = 40,  ymax = 49, fill = "yellow", alpha = 0.9)+
+  annotate("text", x = -47.3, y = 44.5, label = "Flat", size = 10)+
+  annotate("rect",xmin = -41.3, xmax = -31.65, ymin = 40,  ymax = 49, fill = "blue", alpha = 0.9)+
+  annotate("text", x = -36.475, y = 44.5, label = "Low Seam\nHook/Curl", size = 10)+
+  annotate("rect",xmin = -21.65, xmax = -12, ymin = 40,  ymax = 49, fill = "blue", alpha = 0.9)+
+  annotate("text", x = -16.825, y = 44.5, label = "Low Seam\nHook/Curl", size = 10)+
+  annotate("rect",xmin = -31.65, xmax = -21.65, ymin = 40,  ymax = 49, fill = "maroon", alpha = 0.9)+
+  annotate("text", x = -26.65, y = 44.5, label = "Low\nMiddle", size = 10)+
+  annotate("rect",xmin = -12, xmax = 0, ymin = 49,  ymax = 59, fill = "orange", alpha = 0.9)+
+  annotate("text", x = -6, y = 54, label = "Out", size = 10)+
+  annotate("rect",xmin = -53.3, xmax = -41.3, ymin = 49,  ymax = 59, fill = "orange", alpha = 0.9)+
+  annotate("text", x = -47.3, y = 54, label = "Out", size = 10)+
+  annotate("rect",xmin = -41.3, xmax = -31.65, ymin = 49,  ymax = 59, fill = "turquoise", alpha = 0.9)+
+  annotate("text", x = -36.475, y = 54, label = "Seam\nHook/Curl", size = 10)+
+  annotate("rect",xmin = -21.65, xmax = -12, ymin = 49,  ymax = 59, fill = "turquoise", alpha = 0.9)+
+  annotate("text", x = -16.825, y = 54, label = "Seam\nHook/Curl", size = 10)+
+  annotate("rect",xmin = -31.65, xmax = -21.65, ymin = 49,  ymax = 59, fill = "purple", alpha = 0.9)+
+  annotate("text", x = -26.65, y = 54, label = "Middle\nHook", size = 10)+
+  annotate("rect",xmin = -53.3, xmax = -35.5, ymin = 59,  ymax = Inf, fill = "darkgreen", alpha = 0.9)+
+  annotate("text", x = -44.4, y = 67, label = "Deep\nOutside", size = 10)+
+  annotate("rect",xmin = -17.8, xmax = -0, ymin = 59,  ymax = Inf, fill = "darkgreen", alpha = 0.9)+
+  annotate("text", x = -8.9, y = 67, label = "Deep\nOutside", size = 10)+
+  annotate("rect",xmin = -35.5, xmax = -17.8, ymin = 59,  ymax = Inf, fill = "lightblue", alpha = 0.9)+
+  annotate("text", x = -26.65, y = 67, label = "Deep\nMiddle", size = 10)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Field Zones")+
+  theme(plot.title = element_text(hjust = 0.5, size = 25))
+```
+
+```{r}
+c3_pct_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(0.799, 0.799, 0.779, 0.779, 0.779, 
+                  0.571, 0.571, 0.624, 0.624, 0.665,
+                  0.362, 0.362, 0.328)
+)
+
+c2_pct_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(0.744, 0.744, 0.811, 0.811, 0.825, 
+                  0.551, 0.551, 0.813, 0.813, 0.629,
+                  0.455, 0.455, 0.37)
+)
+
+c4_pct_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(0.813, 0.813, 0.775, 0.775, 0.772, 
+                  0.601, 0.601, 0.667, 0.667, 0.571,
+                  0.369, 0.369, 0.290)
+)
+```
+
+```{r}
+all_vals <- c(
+  c2_pct_df$percentages,
+  c3_pct_df$percentages,
+  c4_pct_df$percentages
+)
+
+fill_limits <- range(all_vals, na.rm = TRUE)
+pct_fill_scale <-  scale_fill_gradient(
+    low = "blue",
+    high = "orange",
+    name = "Completion %",
+    labels = scales::percent,
+    limits = fill_limits)
+field_background <- geom_football(
+  league = "nfl",
+  display_range = "in_bounds_only",
+  x_trans = 60,
+  y_trans = 26.6667,
+  xlims = c(35, 75),
+  rotation = 90,
+  #color_updates = field_params
+)
+```
+
+```{r}
+c2_pct <- field_background +
+  geom_rect(
+    data = c2_pct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  pct_fill_scale+
+  geom_text(
+  data = c2_pct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 2")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23),
+        legend.text = element_text(size = 6))
+```
+
+
+```{r}
+c3_pct <- field_background +
+  geom_rect(
+    data = c3_pct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  pct_fill_scale+
+  geom_text(
+  data = c3_pct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 3")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23),
+        legend.text = element_text(size = 6))
+```
+
+
+```{r}
+c2_pct <- field_background +
+  geom_rect(
+    data = c2_pct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  pct_fill_scale+
+  geom_text(
+  data = c2_pct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 2")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23),
+        legend.text = element_text(size = 6))
+```
+
+```{r}
+c4_pct <- field_background +
+  geom_rect(
+    data = c4_pct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  pct_fill_scale+
+  geom_text(
+  data = c4_pct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 4 (Quarters)")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23),
+        legend.text = element_text(size = 6))
+```
+
+```{r}
+(c2_pct + c3_pct) /
+  c4_pct +
+  plot_layout(
+    guides = "collect",
+    heights = c(1, 1)
+  ) &
+  theme(legend.position = "bottom")
+```
+
+
+```{r}
+c3_clpct_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(-0.043, -0.043, 0.021, 0.021, 0.076, 
+                  0.048, 0.048, 0.156, 0.156, 0.133,
+                  0.089, 0.089, 0.023)
+)
+
+c2_clpct_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(-0.03, -0.003, -0.04, -0.04, -0.099, 
+                  0.11, 0.11, 0.14, 0.14, 0.133,
+                  0.171, 0.171, 0.246)
+)
+
+c4_clpct_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(-0.051, -0.051, 0.006, 0.006, -0.022, 
+                  0.04, 0.04, 0.15, 0.15, 0.154,
+                  0.037, 0.037, 0.145)
+)
+```
+
+```{r}
+all_vals <- c(
+  c2_clpct_df$percentages,
+  c3_clpct_df$percentages,
+  c4_clpct_df$percentages
+)
+
+fill_limits <- range(all_vals, na.rm = TRUE)
+sep_fill_scale <-  scale_fill_gradient(
+    low = "blue",
+    high = "orange",
+    name = "Separation Change %",
+    labels = scales::percent,
+    limits = fill_limits)
+field_background <- geom_football(
+  league = "nfl",
+  display_range = "in_bounds_only",
+  x_trans = 60,
+  y_trans = 26.6667,
+  xlims = c(35, 75),
+  rotation = 90,
+  #color_updates = field_params
+)
+```
+
+```{r}
+
+sep_change_c3 <- field_background +
+  geom_rect(
+    data = c3_clpct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  sep_fill_scale+
+  geom_text(
+  data = c3_clpct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 3")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23))
+```
+
+
+
+
+```{r}
+sep_change_c2 <- field_background +
+  geom_rect(
+    data = c2_clpct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  sep_fill_scale+
+  geom_text(
+  data = c2_clpct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 2")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23))
+```
+
+```{r}
+sep_change_c4 <- field_background +
+  geom_rect(
+    data = c4_clpct_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  sep_fill_scale+
+  geom_text(
+  data = c4_clpct_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 6)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Cover 4 (Quarters)")+
+  theme(plot.title = element_text(hjust = 0.5, size = 23))
+```
+
+```{r}
+(sep_change_c2 + sep_change_c3) /
+  sep_change_c4 +
+  plot_layout(
+    guides = "collect",
+    heights = c(1, 1)
+  ) &
+  theme(legend.position = "bottom")
+```
+
+
+```{r}
+niners_shc_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(0.416, 0.416, 0.25, 0.25, 0.292, 
+                  0.208, 0.208, 0.042, 0.042, 0.042,
+                  0.167, 0.167, 0.125)
+)
+```
+
+```{r}
+sep_change_c2 <- field_background +
+  geom_rect(
+    data = niners_shc_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  scale_fill_gradient(
+    low = "blue",
+    high = "orange",
+    name = "Pair %",
+    labels = scales::percent)+
+  geom_text(
+  data = niners_shc_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = scales::percent(percentages)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "white",
+  size = 12)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "San Francisco 49ers Pair Percentages Targeting SHC vs. Cover 3")+
+  theme(plot.title = element_text(hjust = 0.5, size = 25))
+```
+
+```{r}
+niners_pearson_c3_df <- tibble(
+  region = c("Right Flat", "Left Flat", "Right Shallow SHC",
+             "Left Shallow SHC", "Shallow Middle",
+             "Right Out", "Left Out", "Right SHC", "Left SHC", "Middle Hook",
+             "Left Deep Outside", "Right Deep Outside", "Deep Middle"),
+  xmin = c(-12, -53.3, -41.3, -21.65, -31.65, 
+           -12, -53.3, -41.3, -21.65, -31.65,
+           -53.3, -17.8, -35.5),
+  xmax = c(0, -41.3, -31.65, -12, -21.65,
+           0, -41.3, -31.65, -12, -21.65,
+           -35.5, 0,
+           -17.8),
+  ymin = c(40, 40, 40, 40, 40,
+           49, 49, 49, 49, 49,
+           59, 59, 59),
+  ymax = c(49, 49, 49, 49, 49,
+           59, 59, 59, 59, 59,
+           75, 75, 75),
+  percentages = c(-0.717, -0.717, -0.141, -0.141, -0.187, 
+                  -0.208, -0.208, -0.192, -0.192, -0.08,
+                  2.28, 2.28, 0.567)
+)
+```
+
+```{r}
+field_background <- geom_football(
+  league = "nfl",
+  display_range = "in_bounds_only",
+  x_trans = 60,
+  y_trans = 26.6667,
+  xlims = c(35, 75),
+  rotation = 90,
+  #color_updates = field_params
+)
+field_background +
+  geom_rect(
+    data = niners_pearson_c3_df,
+    aes(
+      xmin = xmin,
+      xmax = xmax,
+      ymin = ymin,
+      ymax = ymax,
+      fill = percentages
+    ),
+    alpha = 0.9,
+    color = "black"
+  ) +
+  scale_fill_gradient2(
+  low = "blue",
+  mid = "white",
+  high = "orange",
+  midpoint = 0,
+  name = "Pair Preference")+
+  geom_text(
+  data = niners_pearson_c3_df,
+  aes(
+    x = (xmin + xmax) / 2,
+    y = (ymin + ymax) / 2,
+    label = round(percentages, 2)
+  ),
+  angle = 0,
+  fontface = "bold",
+  color = "black",
+  size = 12)+
+  geom_segment(aes(x = -53.3, y = 40, xend = 0, yend = 40), color = "blue", linewidth = 1.2)+
+  labs(title = "Pair Preferences for 49ers Non-Targeted Routes",
+       subtitle = "Cover 3 Reps vs. All Reps")+
+  theme(plot.title = element_text(hjust = 0.5, size = 25),
+        plot.subtitle = element_text(hjust = 0.5, size = 18))
+```
+
